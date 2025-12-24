@@ -16,7 +16,7 @@
   <div class="left-panel">
     <div class="panel-header">
       <h2>📁 Folders</h2>
-      <button onclick="showCreateFolder()" style="padding: 6px 12px; background-color: #44ff44; color: white; border: none; border-radius: 5px; cursor: pointer;">+ New</button>
+      <button class="btn-new-folder" onclick="showCreateFolder()">+ New</button>
     </div>
     <div id="folderTree" class="folder-tree">
       <div class="tree-loading">Loading...</div>
@@ -28,7 +28,7 @@
     <div class="panel-header">
       <h2 id="currentFolderName">🎵 All Files</h2>
       <div class="header-actions">
-        <button onclick="showCreateFolder()" style="padding: 6px 12px; background-color: #44ff44; color: white; border: none; border-radius: 5px; cursor: pointer;">+ Subfolder</button>
+        <button class="btn-new-folder" onclick="showCreateFolder()">+ New Folder</button>
       </div>
     </div>
     <div id="breadcrumbs" class="breadcrumbs">
@@ -93,7 +93,7 @@
   <h3>Create New Folder</h3>
   <input type="text" id="newFolderName" placeholder="Folder name">
   <div class="modal-buttons">
-    <button onclick="createFolder()" style="background-color: #44ff44;">Create</button>
+    <button onclick="createFolder()" class="btn-new-folder">Create</button>
     <button onclick="document.getElementById('createFolderModal').style.display='none'" style="background-color: #ccc;">Cancel</button>
   </div>
 </div>

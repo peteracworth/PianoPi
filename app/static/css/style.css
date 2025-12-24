@@ -43,6 +43,18 @@ body {
 .btn-move { background-color: #888; color: white; }
 .btn-rename-folder { background-color: #4444ff; color: white; }
 .btn-delete-folder { background-color: #ff4444; color: white; }
+.btn-new-folder {
+  padding: 6px 12px;
+  background-color: #1B5E20;
+  color: white;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  font-weight: 500;
+}
+.btn-new-folder:hover {
+  background-color: #2E7D32;
+}
 
 /* Upload Area */
 .upload-area {
@@ -1068,9 +1080,9 @@ body {
     font-size: 1.1em;
   }
   
-  /* Hide subfolder button on mobile since folders panel is hidden */
+  /* Keep folder button visible on mobile */
   .header-actions {
-    display: none;
+    display: block;
   }
   
   /* Compact playback controls */
