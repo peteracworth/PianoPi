@@ -66,22 +66,27 @@ def stop_and_reset():
 
 
 def get_piano_channels(mid):
-    """Scan MIDI file and return channels that have piano instruments (programs 0-7)"""
-    piano_channels = set()
+    """Scan MIDI file and return channels that have piano instruments (programs 0-7) AND notes"""
     channel_programs = {}
+    channels_with_notes = set()
     
     for track in mid.tracks:
         for msg in track:
             if msg.type == 'program_change':
                 channel_programs[msg.channel] = msg.program
-                # General MIDI: 0-7 are piano family instruments
-                # Channel 9 is ALWAYS drums in GM, regardless of program number
-                if msg.program <= 7 and msg.channel != 9:
-                    piano_channels.add(msg.channel)
+            elif msg.type == 'note_on' and msg.velocity > 0:
+                channels_with_notes.add(msg.channel)
     
-    # If no piano found, return all non-drum channels (channel 9 is drums in GM)
+    # Find channels with piano programs (0-7) that also have notes
+    piano_channels = set()
+    for channel, program in channel_programs.items():
+        # Programs 0-7 are piano family, channel 9 is always drums
+        if program <= 7 and channel != 9 and channel in channels_with_notes:
+            piano_channels.add(channel)
+    
+    # If no piano found, return all non-drum channels that have notes
     if not piano_channels:
-        piano_channels = set(range(16)) - {9}
+        piano_channels = channels_with_notes - {9}
     
     # Always exclude channel 9 (drums)
     piano_channels.discard(9)
@@ -187,16 +192,23 @@ def play_loop():
                 elif wait_time < -0.5:
                     print(f"Warning: playback {-wait_time:.2f}s behind schedule")
 
-                # Send the message (filter by channel if piano_only mode)
+                # Send the message (filter by channel and type for piano playback)
                 if not msg.is_meta:
+                    # Filter by channel
                     if hasattr(msg, 'channel') and msg.channel not in allowed_channels:
                         continue
                     
+                    # For player piano: only send note_on, note_off, and sustain pedal
+                    # Skip control_change (except sustain), pitchwheel, program_change, etc.
                     if msg.type == "note_on":
                         volume_scale = state["volume"] / 127
                         msg = msg.copy(velocity=int(msg.velocity * volume_scale))
-                    
-                    port.send(msg)
+                        port.send(msg)
+                    elif msg.type == "note_off":
+                        port.send(msg)
+                    elif msg.type == "control_change" and msg.control == 64:
+                        # Sustain pedal (CC 64) - useful for piano
+                        port.send(msg)
 
             # If we broke out due to seek, restart the loop
             if state.get("seek_to") is not None and state["playing"]:
