@@ -622,7 +622,7 @@ def analyze_file():
 
 @app.route("/all_music", methods=["GET"])
 def all_music():
-    """Get files and folders in the library"""
+    """Get files and folders in the library - optimized with scandir"""
     try:
         os.makedirs(MIDI_DIR, exist_ok=True)
         
@@ -632,23 +632,22 @@ def all_music():
         
         current_path = os.path.join(MIDI_DIR, path_param) if path_param else MIDI_DIR
         
-        if not os.path.exists(current_path) or not os.path.isdir(current_path):
+        if not os.path.isdir(current_path):
             return {"success": False, "message": "Path not found"}, 404
         
-        # Get items from filesystem
-        items = os.listdir(current_path)
+        # Use scandir for better performance (avoids extra stat calls)
         files_dict, folders_dict = {}, {}
         
-        for item in items:
-            if item.startswith('.'):
-                continue
-            item_path = os.path.join(current_path, item)
-            relative_path = os.path.join(path_param, item).replace('\\', '/') if path_param else item
-            
-            if os.path.isdir(item_path):
-                folders_dict[item] = relative_path
-            elif item.lower().endswith(('.mid', '.midi')):
-                files_dict[item] = relative_path
+        with os.scandir(current_path) as entries:
+            for entry in entries:
+                if entry.name.startswith('.'):
+                    continue
+                relative_path = os.path.join(path_param, entry.name).replace('\\', '/') if path_param else entry.name
+                
+                if entry.is_dir():
+                    folders_dict[entry.name] = relative_path
+                elif entry.is_file() and entry.name.lower().endswith(('.mid', '.midi')):
+                    files_dict[entry.name] = relative_path
         
         # Load saved order if exists
         order_file = os.path.join(current_path, ".order.json")
@@ -660,10 +659,14 @@ def all_music():
             except:
                 pass
         
-        # Sort items: saved order first, then alphabetical for new items
+        # Convert to set for O(1) lookup
+        saved_order_set = set(saved_order)
+        saved_order_idx = {name: i for i, name in enumerate(saved_order)}
+        
+        # Sort items: saved order first, then alphabetical
         def sort_key(name):
-            if name in saved_order:
-                return (0, saved_order.index(name))
+            if name in saved_order_set:
+                return (0, saved_order_idx[name])
             return (1, name.lower())
         
         sorted_folders = sorted(folders_dict.keys(), key=sort_key)

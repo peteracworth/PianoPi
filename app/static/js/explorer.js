@@ -1,7 +1,7 @@
-// File Explorer JavaScript
+// File Explorer JavaScript - Optimized for Raspberry Pi
 
 let currentPath = '';
-let folderTreeData = {};
+let folderCache = {};  // Cache folder contents to avoid refetching
 
 // ============================================================================
 // Unified Drag-Drop System
@@ -9,38 +9,31 @@ let folderTreeData = {};
 
 const DragDrop = {
   draggedPath: null,
-  draggedType: null,  // 'file' or 'folder'
+  draggedType: null,
   
-  // Start dragging an item
   start(path, type, element) {
     this.draggedPath = path;
     this.draggedType = type;
     element.classList.add('dragging');
   },
   
-  // End dragging
   end() {
     this.draggedPath = null;
     this.draggedType = null;
-    // Clean up all visual indicators
     document.querySelectorAll('.dragging, .drop-target, .drop-above, .drop-below, .drop-into').forEach(el => {
       el.classList.remove('dragging', 'drop-target', 'drop-above', 'drop-below', 'drop-into');
     });
   },
   
-  // Check if we can drop on a target
   canDrop(targetPath) {
     if (!this.draggedPath) return false;
     if (this.draggedPath === targetPath) return false;
-    // Can't drop folder into itself or its children
     if (this.draggedType === 'folder' && targetPath && targetPath.startsWith(this.draggedPath + '/')) return false;
     return true;
   },
   
-  // Execute the drop - move item into target folder
   dropIntoFolder(targetFolderPath) {
     if (!this.draggedPath) return;
-    
     if (this.draggedType === 'file') {
       this.moveFile(this.draggedPath, targetFolderPath);
     } else {
@@ -48,14 +41,12 @@ const DragDrop = {
     }
   },
   
-  // Reorder items within same folder
   reorder(targetPath, insertBefore) {
     if (!this.draggedPath) return;
     
     const draggedParent = this.getParentPath(this.draggedPath);
     const targetParent = this.getParentPath(targetPath);
     
-    // If different folders, do a move instead
     if (draggedParent !== targetParent) {
       this.dropIntoFolder(targetParent);
       return;
@@ -75,8 +66,8 @@ const DragDrop = {
     .then(r => r.json())
     .then(data => {
       if (data.success) {
+        invalidateCache(draggedParent);
         loadFiles(currentPath);
-        loadFolderTree();
       }
     });
   },
@@ -90,7 +81,8 @@ const DragDrop = {
     .then(r => r.json())
     .then(data => {
       if (data.success) {
-        refreshAll();
+        invalidateCache();
+        refreshCurrentView();
       } else {
         alert('Error: ' + data.message);
       }
@@ -99,7 +91,7 @@ const DragDrop = {
   
   moveFolder(folderPath, targetFolder) {
     if (targetFolder === folderPath || (targetFolder && targetFolder.startsWith(folderPath + '/'))) {
-      return; // Can't move into self
+      return;
     }
     
     fetch('/move_folder', {
@@ -110,7 +102,8 @@ const DragDrop = {
     .then(r => r.json())
     .then(data => {
       if (data.success) {
-        refreshAll();
+        invalidateCache();
+        refreshCurrentView();
       } else {
         alert('Error: ' + data.message);
       }
@@ -122,27 +115,19 @@ const DragDrop = {
     return path.substring(0, path.lastIndexOf('/'));
   },
   
-  // Make an element draggable
   makeDraggable(element, path, type) {
     element.draggable = true;
-    
     element.addEventListener('dragstart', (e) => {
       e.stopPropagation();
       this.start(path, type, element);
       e.dataTransfer.effectAllowed = 'move';
       e.dataTransfer.setData('text/plain', path);
     });
-    
-    element.addEventListener('dragend', () => {
-      this.end();
-    });
+    element.addEventListener('dragend', () => this.end());
   },
   
-  // Make an element a drop target for moving items INTO it (folder target)
-  // Also accepts external file drops from desktop
   makeFolderDropTarget(element, folderPath) {
     element.addEventListener('dragover', (e) => {
-      // Accept internal drag or external files
       const hasFiles = e.dataTransfer.types.includes('Files');
       if (!hasFiles && !this.canDrop(folderPath)) return;
       e.preventDefault();
@@ -161,20 +146,17 @@ const DragDrop = {
       e.stopPropagation();
       element.classList.remove('drop-target');
       
-      // Check for external file drop (from desktop)
       if (e.dataTransfer.files && e.dataTransfer.files.length > 0 && !this.draggedPath) {
         this.uploadFiles(e.dataTransfer.files, folderPath);
         return;
       }
       
-      // Internal drag-drop
       if (this.canDrop(folderPath)) {
         this.dropIntoFolder(folderPath);
       }
     });
   },
   
-  // Upload files to a folder
   uploadFiles(files, targetFolder) {
     const formData = new FormData();
     let count = 0;
@@ -199,14 +181,16 @@ const DragDrop = {
     .then(r => r.json())
     .then(data => {
       if (data.success) {
-        refreshAll();
+        invalidateCache(targetFolder);
+        if (targetFolder === currentPath) {
+          loadFiles(currentPath);
+        }
       } else {
         alert('Upload error: ' + data.message);
       }
     });
   },
   
-  // Make an element a reorder target (for reordering within same folder)
   makeReorderTarget(element, itemPath) {
     element.addEventListener('dragover', (e) => {
       if (!this.canDrop(itemPath)) return;
@@ -217,11 +201,7 @@ const DragDrop = {
       const midY = rect.top + rect.height / 2;
       
       element.classList.remove('drop-above', 'drop-below');
-      if (e.clientY < midY) {
-        element.classList.add('drop-above');
-      } else {
-        element.classList.add('drop-below');
-      }
+      element.classList.add(e.clientY < midY ? 'drop-above' : 'drop-below');
     });
     
     element.addEventListener('dragleave', () => {
@@ -241,83 +221,71 @@ const DragDrop = {
 };
 
 // ============================================================================
-// Folder Tree
+// Cache Management
+// ============================================================================
+
+function invalidateCache(path) {
+  if (path === undefined) {
+    folderCache = {};
+  } else {
+    delete folderCache[path || ''];
+  }
+}
+
+async function fetchFolder(path) {
+  // Return cached if available
+  if (folderCache[path || '']) {
+    return folderCache[path || ''];
+  }
+  
+  const url = '/all_music' + (path ? '?path=' + encodeURIComponent(path) : '');
+  const response = await fetch(url);
+  const data = await response.json();
+  
+  if (data.success) {
+    folderCache[path || ''] = data;
+  }
+  return data;
+}
+
+// ============================================================================
+// Folder Tree - LAZY LOADING (only fetches what's visible)
 // ============================================================================
 
 async function loadFolderTree() {
   const treeContainer = document.getElementById('folderTree');
   if (!treeContainer) return;
-  treeContainer.innerHTML = '<div class="tree-loading">Loading...</div>';
   
+  treeContainer.innerHTML = '';
+  
+  // Root item
+  const rootItem = createTreeItem('📁 Library', '', 0, true);
+  rootItem.classList.add('selected');
+  treeContainer.appendChild(rootItem);
+  
+  // Load only root level folders
   try {
-    folderTreeData = await fetchFolderStructure('');
-    renderFolderTree();
+    const data = await fetchFolder('');
+    if (data.success && data.folders) {
+      data.folders.forEach(folder => {
+        const item = createTreeItem('📁 ' + folder.name, folder.path, 1, false);
+        treeContainer.appendChild(item);
+      });
+    }
   } catch (error) {
-    treeContainer.innerHTML = '<p>Error loading folders</p>';
     console.error('Error loading folder tree:', error);
   }
 }
 
-async function fetchFolderStructure(path) {
-  const url = '/all_music' + (path ? '?path=' + encodeURIComponent(path) : '');
-  const response = await fetch(url);
-  const data = await response.json();
-  
-  if (!data.success) throw new Error(data.message || 'Failed to load');
-  
-  const result = {
-    path: path,
-    name: path ? path.split('/').pop() : 'Library',
-    folders: [],
-    files: data.files || []
-  };
-  
-  for (const folder of (data.folders || [])) {
-    result.folders.push(await fetchFolderStructure(folder.path));
-  }
-  
-  return result;
-}
-
-function renderFolderTree() {
-  const treeContainer = document.getElementById('folderTree');
-  treeContainer.innerHTML = '';
-  
-  // Root item
-  const rootItem = createTreeItem('📁 Library', '', 0);
-  rootItem.classList.add('selected');
-  treeContainer.appendChild(rootItem);
-  
-  renderTreeLevel(treeContainer, folderTreeData.folders, 1);
-}
-
-function renderTreeLevel(container, folders, level) {
-  folders.forEach(folder => {
-    const item = createTreeItem('📁 ' + folder.name, folder.path, level);
-    container.appendChild(item);
-    
-    if (folder.folders.length > 0) {
-      const childContainer = document.createElement('div');
-      childContainer.className = 'tree-children';
-      childContainer.dataset.path = folder.path;
-      renderTreeLevel(childContainer, folder.folders, level + 1);
-      container.appendChild(childContainer);
-    }
-  });
-}
-
-function createTreeItem(name, path, level) {
+function createTreeItem(name, path, level, isRoot) {
   const item = document.createElement('div');
   item.className = 'tree-item';
   item.dataset.path = path;
   item.style.paddingLeft = (level * 20 + 10) + 'px';
   
-  // Make non-root items draggable
-  if (path) {
+  if (!isRoot) {
     DragDrop.makeDraggable(item, path, 'folder');
   }
-  
-  // All items are drop targets
   DragDrop.makeFolderDropTarget(item, path);
   
   const label = document.createElement('span');
@@ -349,7 +317,7 @@ function selectFolder(path) {
 }
 
 // ============================================================================
-// Breadcrumbs (with drop targets)
+// Breadcrumbs
 // ============================================================================
 
 function updateBreadcrumbs(path) {
@@ -357,7 +325,6 @@ function updateBreadcrumbs(path) {
   if (!breadcrumbs) return;
   breadcrumbs.innerHTML = '';
   
-  // Root breadcrumb
   const root = createBreadcrumb('📁 Library', '');
   breadcrumbs.appendChild(root);
   
@@ -390,9 +357,7 @@ function createBreadcrumb(text, path) {
     selectFolder(path);
   };
   
-  // Make breadcrumb a drop target
   DragDrop.makeFolderDropTarget(crumb, path);
-  
   return crumb;
 }
 
@@ -406,9 +371,7 @@ async function loadFiles(path) {
   container.innerHTML = '<p>Loading...</p>';
   
   try {
-    const url = '/all_music' + (path ? '?path=' + encodeURIComponent(path) : '');
-    const response = await fetch(url);
-    const data = await response.json();
+    const data = await fetchFolder(path);
     
     if (data.success) {
       renderFiles(data.files || [], data.folders || []);
@@ -425,7 +388,6 @@ function renderFiles(files, folders) {
   const container = document.getElementById('fileContainer');
   container.innerHTML = '';
   
-  // Store for playback
   currentFiles = files.map(f => f.path);
   
   if (files.length === 0 && folders.length === 0) {
@@ -433,15 +395,8 @@ function renderFiles(files, folders) {
     return;
   }
   
-  // Render folders
-  folders.forEach(folder => {
-    container.appendChild(createFolderElement(folder));
-  });
-  
-  // Render files
-  files.forEach(file => {
-    container.appendChild(createFileElement(file));
-  });
+  folders.forEach(folder => container.appendChild(createFolderElement(folder)));
+  files.forEach(file => container.appendChild(createFileElement(file)));
 }
 
 function createFolderElement(folder) {
@@ -449,38 +404,21 @@ function createFolderElement(folder) {
   div.className = 'file-item folder-item';
   div.dataset.path = folder.path;
   
-  const icon = document.createElement('span');
-  icon.className = 'file-icon';
-  icon.textContent = '📁';
+  div.innerHTML = `
+    <span class="file-icon">📁</span>
+    <span class="file-name">${escapeHtml(folder.name)}</span>
+    <div class="file-actions">
+      <button title="Rename">✏️</button>
+      <button title="Delete">🗑️</button>
+    </div>
+  `;
   
-  const name = document.createElement('span');
-  name.className = 'file-name';
-  name.textContent = folder.name;
+  const buttons = div.querySelectorAll('button');
+  buttons[0].onclick = (e) => { e.stopPropagation(); showRenameFolder(folder.path, folder.name); };
+  buttons[1].onclick = (e) => { e.stopPropagation(); deleteFolder(folder.path); };
   
-  const actions = document.createElement('div');
-  actions.className = 'file-actions';
-  
-  const renameBtn = document.createElement('button');
-  renameBtn.textContent = '✏️';
-  renameBtn.title = 'Rename';
-  renameBtn.onclick = (e) => { e.stopPropagation(); showRenameFolder(folder.path, folder.name); };
-  
-  const deleteBtn = document.createElement('button');
-  deleteBtn.textContent = '🗑️';
-  deleteBtn.title = 'Delete';
-  deleteBtn.onclick = (e) => { e.stopPropagation(); deleteFolder(folder.path); };
-  
-  actions.appendChild(renameBtn);
-  actions.appendChild(deleteBtn);
-  
-  div.appendChild(icon);
-  div.appendChild(name);
-  div.appendChild(actions);
-  
-  // Click to navigate
   div.onclick = () => selectFolder(folder.path);
   
-  // Make draggable and drop target
   DragDrop.makeDraggable(div, folder.path, 'folder');
   DragDrop.makeFolderDropTarget(div, folder.path);
   
@@ -492,46 +430,34 @@ function createFileElement(file) {
   div.className = 'file-item';
   div.dataset.path = file.path;
   
-  const icon = document.createElement('span');
-  icon.className = 'file-icon';
-  icon.textContent = '🎵';
+  div.innerHTML = `
+    <span class="file-icon">🎵</span>
+    <span class="file-name">${escapeHtml(file.name)}</span>
+    <div class="file-actions">
+      <button title="File Info">ℹ️</button>
+      <button title="Delete">🗑️</button>
+    </div>
+  `;
   
-  const name = document.createElement('span');
-  name.className = 'file-name';
-  name.textContent = file.name;
+  const buttons = div.querySelectorAll('button');
+  buttons[0].onclick = (e) => { e.stopPropagation(); showFileInfo(file.path); };
+  buttons[1].onclick = (e) => { e.stopPropagation(); deleteFile(file.path); };
   
-  const actions = document.createElement('div');
-  actions.className = 'file-actions';
-  
-  const infoBtn = document.createElement('button');
-  infoBtn.textContent = 'ℹ️';
-  infoBtn.title = 'File Info';
-  infoBtn.onclick = (e) => { e.stopPropagation(); showFileInfo(file.path); };
-  
-  const deleteBtn = document.createElement('button');
-  deleteBtn.textContent = '🗑️';
-  deleteBtn.title = 'Delete';
-  deleteBtn.onclick = (e) => { e.stopPropagation(); deleteFile(file.path); };
-  
-  actions.appendChild(infoBtn);
-  actions.appendChild(deleteBtn);
-  
-  div.appendChild(icon);
-  div.appendChild(name);
-  div.appendChild(actions);
-  
-  // Click to play this file
   div.onclick = (e) => {
-    // Don't play if clicking on action buttons
     if (e.target.closest('.file-actions')) return;
     playFile(file.path);
   };
   
-  // Make draggable and reorder target
   DragDrop.makeDraggable(div, file.path, 'file');
   DragDrop.makeReorderTarget(div, file.path);
   
   return div;
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
 }
 
 // ============================================================================
@@ -557,7 +483,8 @@ function createFolder() {
   .then(data => {
     if (data.success) {
       document.getElementById('createFolderModal').style.display = 'none';
-      refreshAll();
+      invalidateCache(currentPath);
+      refreshCurrentView();
     } else {
       alert('Error: ' + data.message);
     }
@@ -585,7 +512,8 @@ function renameFolder() {
   .then(data => {
     if (data.success) {
       document.getElementById('renameFolderModal').style.display = 'none';
-      refreshAll();
+      invalidateCache();
+      refreshCurrentView();
     } else {
       alert('Error: ' + data.message);
     }
@@ -603,7 +531,8 @@ function deleteFolder(folderPath) {
   .then(r => r.json())
   .then(data => {
     if (data.success) {
-      refreshAll();
+      invalidateCache();
+      refreshCurrentView();
     } else {
       alert('Error: ' + data.message);
     }
@@ -625,6 +554,7 @@ function deleteFile(filePath) {
   .then(r => r.json())
   .then(data => {
     if (data.success) {
+      invalidateCache(currentPath);
       loadFiles(currentPath);
     } else {
       alert('Error: ' + data.message);
@@ -633,7 +563,7 @@ function deleteFile(filePath) {
 }
 
 // ============================================================================
-// File Container Drop Target (for uploading to current folder)
+// File Container Drop Target
 // ============================================================================
 
 function setupFileContainerDrop() {
@@ -641,7 +571,6 @@ function setupFileContainerDrop() {
   if (!container) return;
   
   container.addEventListener('dragover', (e) => {
-    // Only show drop target for external files when not over a specific item
     if (e.target === container || e.target.classList.contains('empty-message')) {
       if (e.dataTransfer.types.includes('Files') && !DragDrop.draggedPath) {
         e.preventDefault();
@@ -658,7 +587,6 @@ function setupFileContainerDrop() {
   
   container.addEventListener('drop', (e) => {
     container.classList.remove('drop-target');
-    // Only handle if dropping on container itself (not on items)
     if ((e.target === container || e.target.classList.contains('empty-message')) && 
         e.dataTransfer.files.length > 0 && !DragDrop.draggedPath) {
       e.preventDefault();
@@ -669,18 +597,13 @@ function setupFileContainerDrop() {
 }
 
 // ============================================================================
-// Refresh
+// Refresh - optimized to only reload what's needed
 // ============================================================================
 
-async function refreshAll() {
-  await loadFolderTree();
-  await loadFiles(currentPath);
+async function refreshCurrentView() {
+  loadFolderTree();
+  loadFiles(currentPath);
   updateBreadcrumbs(currentPath);
-  
-  setTimeout(() => {
-    const item = document.querySelector('.tree-item[data-path="' + currentPath + '"]');
-    if (item) item.classList.add('selected');
-  }, 100);
 }
 
 // ============================================================================
@@ -705,9 +628,7 @@ function setTempo(value) {
 function togglePianoOnly() {
   fetch('/toggle_piano_only')
   .then(r => r.json())
-  .then(data => {
-    updatePianoOnlyButton(data.piano_only);
-  });
+  .then(data => updatePianoOnlyButton(data.piano_only));
 }
 
 function updatePianoOnlyButton(isOn) {
@@ -754,8 +675,6 @@ function playFile(filePath) {
       isPaused = false;
       updatePlayPauseButton();
       startStatusPolling();
-    } else {
-      alert('Error: ' + data.message);
     }
   });
 }
@@ -851,7 +770,6 @@ function updateStatus() {
     if (tempoSlider) tempoSlider.value = data.tempo;
     if (tempoValue) tempoValue.textContent = data.tempo + '%';
     
-    // Update progress slider
     updateProgressSlider(data.position || 0, data.duration || 0);
   });
 }
@@ -868,8 +786,6 @@ function updateProgressSlider(position, duration) {
   const total = document.getElementById('totalTime');
   
   if (!slider || !elapsed || !total) return;
-  
-  // Don't update if user is dragging
   if (slider.dataset.dragging === 'true') return;
   
   elapsed.textContent = formatTime(position);
@@ -887,16 +803,9 @@ function updateProgressSlider(position, duration) {
 let seekTimeout = null;
 
 function seekTo(position) {
-  // Debounce seek requests
   if (seekTimeout) clearTimeout(seekTimeout);
   seekTimeout = setTimeout(() => {
-    fetch('/seek/' + position)
-    .then(r => r.json())
-    .then(data => {
-      if (!data.success) {
-        console.log('Seek failed:', data.message);
-      }
-    });
+    fetch('/seek/' + position);
   }, 100);
 }
 
@@ -904,30 +813,19 @@ function setupProgressSlider() {
   const slider = document.getElementById('progressSlider');
   if (!slider) return;
   
-  slider.addEventListener('mousedown', () => {
-    slider.dataset.dragging = 'true';
-  });
-  
-  slider.addEventListener('touchstart', () => {
-    slider.dataset.dragging = 'true';
-  });
-  
+  slider.addEventListener('mousedown', () => slider.dataset.dragging = 'true');
+  slider.addEventListener('touchstart', () => slider.dataset.dragging = 'true');
   slider.addEventListener('mouseup', () => {
     slider.dataset.dragging = 'false';
     seekTo(parseFloat(slider.value));
   });
-  
   slider.addEventListener('touchend', () => {
     slider.dataset.dragging = 'false';
     seekTo(parseFloat(slider.value));
   });
-  
   slider.addEventListener('input', () => {
-    // Update time display while dragging
     const elapsed = document.getElementById('elapsedTime');
-    if (elapsed) {
-      elapsed.textContent = formatTime(parseFloat(slider.value));
-    }
+    if (elapsed) elapsed.textContent = formatTime(parseFloat(slider.value));
   });
 }
 
@@ -960,7 +858,7 @@ function showFileInfo(filePath) {
       content.innerHTML = '<p class="error">Error: ' + data.message + '</p>';
     }
   })
-  .catch(err => {
+  .catch(() => {
     content.innerHTML = '<p class="error">Error loading file info</p>';
   });
 }
@@ -968,23 +866,15 @@ function showFileInfo(filePath) {
 function renderFileInfo(info) {
   let html = '<div class="info-grid">';
   
-  // Basic info
-  html += '<div class="info-section">';
-  html += '<h4>📋 General</h4>';
-  html += '<table class="info-table">';
+  html += '<div class="info-section"><h4>📋 General</h4><table class="info-table">';
   html += `<tr><td>Duration</td><td>${formatTime(info.duration_seconds)}</td></tr>`;
   html += `<tr><td>Type</td><td>${info.type_name}</td></tr>`;
   html += `<tr><td>Tracks</td><td>${info.num_tracks}</td></tr>`;
   html += `<tr><td>Total Notes</td><td>${info.total_notes.toLocaleString()}</td></tr>`;
-  if (info.tempo_bpm) {
-    html += `<tr><td>Tempo</td><td>${info.tempo_bpm} BPM</td></tr>`;
-  }
-  html += '</table>';
-  html += '</div>';
+  if (info.tempo_bpm) html += `<tr><td>Tempo</td><td>${info.tempo_bpm} BPM</td></tr>`;
+  html += '</table></div>';
   
-  // Piano info
-  html += '<div class="info-section">';
-  html += '<h4>🎹 Piano</h4>';
+  html += '<div class="info-section"><h4>🎹 Piano</h4>';
   if (info.has_piano) {
     html += `<p class="status-good">✅ Piano tracks found (Ch: ${info.piano_channels.join(', ')})</p>`;
   } else {
@@ -992,30 +882,20 @@ function renderFileInfo(info) {
   }
   html += '</div>';
   
-  // Warnings
   if (info.warnings && info.warnings.length > 0) {
-    html += '<div class="info-section warnings">';
-    html += '<h4>⚠️ Warnings</h4>';
-    info.warnings.forEach(w => {
-      html += `<p class="warning-item">${w}</p>`;
-    });
+    html += '<div class="info-section warnings"><h4>⚠️ Warnings</h4>';
+    info.warnings.forEach(w => html += `<p class="warning-item">${w}</p>`);
     html += '</div>';
   }
   
   html += '</div>';
   
-  // Track list
-  html += '<div class="info-section">';
-  html += '<h4>🎼 Tracks</h4>';
-  html += '<table class="tracks-table">';
-  html += '<tr><th>Ch</th><th>Instrument</th><th>Notes</th><th>Range</th></tr>';
+  html += '<div class="info-section"><h4>🎼 Tracks</h4>';
+  html += '<table class="tracks-table"><tr><th>Ch</th><th>Instrument</th><th>Notes</th><th>Range</th></tr>';
   
   info.track_info.forEach(track => {
     if (track.notes > 0) {
-      let rowClass = '';
-      if (track.is_piano) rowClass = 'piano-track';
-      else if (track.is_drums) rowClass = 'drums-track';
-      
+      let rowClass = track.is_piano ? 'piano-track' : (track.is_drums ? 'drums-track' : '');
       const name = track.name ? `<br><small>${track.name}</small>` : '';
       html += `<tr class="${rowClass}">`;
       html += `<td>${track.channel !== null ? track.channel : '-'}</td>`;
@@ -1026,9 +906,7 @@ function renderFileInfo(info) {
     }
   });
   
-  html += '</table>';
-  html += '</div>';
-  
+  html += '</table></div>';
   return html;
 }
 
