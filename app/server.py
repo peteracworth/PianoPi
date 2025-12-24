@@ -26,7 +26,11 @@ state = {
     "playing": False,
     "paused": False,
     "volume": 100,
-    "tempo": 100
+    "tempo": 100,
+    "piano_only": True,  # Filter to piano channels only
+    "position": 0,       # Current position in seconds
+    "duration": 0,       # Total duration in seconds
+    "seek_to": None      # Target position for seeking (None = no seek)
 }
 
 
@@ -34,8 +38,59 @@ state = {
 # MIDI Playback
 # ============================================================================
 
+def send_all_notes_off():
+    """Send all-notes-off message on all channels to silence any stuck notes"""
+    try:
+        port = mido.open_output(MIDI_PORT)
+        for channel in range(16):
+            # All notes off (CC 123)
+            port.send(mido.Message('control_change', channel=channel, control=123, value=0))
+            # All sound off (CC 120)  
+            port.send(mido.Message('control_change', channel=channel, control=120, value=0))
+        port.close()
+    except Exception as e:
+        print(f"Error sending all notes off: {e}")
+
+
+def stop_and_reset():
+    """Stop current playback and wait for it to finish"""
+    if state["playing"]:
+        state["playing"] = False
+        state["paused"] = False
+        # Wait for playback thread to notice and stop
+        time.sleep(0.3)
+        # Send all notes off to silence any stuck notes
+        send_all_notes_off()
+        # Brief pause before new playback
+        time.sleep(0.1)
+
+
+def get_piano_channels(mid):
+    """Scan MIDI file and return channels that have piano instruments (programs 0-7)"""
+    piano_channels = set()
+    channel_programs = {}
+    
+    for track in mid.tracks:
+        for msg in track:
+            if msg.type == 'program_change':
+                channel_programs[msg.channel] = msg.program
+                # General MIDI: 0-7 are piano family instruments
+                # Channel 9 is ALWAYS drums in GM, regardless of program number
+                if msg.program <= 7 and msg.channel != 9:
+                    piano_channels.add(msg.channel)
+    
+    # If no piano found, return all non-drum channels (channel 9 is drums in GM)
+    if not piano_channels:
+        piano_channels = set(range(16)) - {9}
+    
+    # Always exclude channel 9 (drums)
+    piano_channels.discard(9)
+    
+    return piano_channels
+
+
 def play_loop():
-    """Main playback loop"""
+    """Main playback loop using mido's play() for accurate timing"""
     state["playing"] = True
 
     while state["playing"]:
@@ -45,35 +100,132 @@ def play_loop():
 
         track = state["tracks"][state["index"]]
         path = os.path.join(MIDI_DIR, track)
+        port = None
 
         try:
             mid = mido.MidiFile(path)
             port = mido.open_output(MIDI_PORT)
 
+            # Determine which channels to play
+            if state.get("piano_only", True):
+                allowed_channels = get_piano_channels(mid)
+                print(f"Piano-only mode: playing channels {sorted(allowed_channels)}")
+            else:
+                allowed_channels = set(range(16))  # All channels
+
+            # Pre-compute all messages with absolute timestamps
+            messages = []
+            abs_time = 0
             for msg in mid:
+                abs_time += msg.time
+                messages.append((abs_time, msg))
+            
+            total_duration = abs_time
+            state["duration"] = total_duration
+            state["position"] = 0
+            print(f"Loaded {len(messages)} messages, duration {total_duration:.1f}s")
+            
+            # Play with absolute timing
+            start_time = time.perf_counter()
+            pause_offset = 0
+            start_position = 0
+            
+            # Check if we need to seek to a position
+            if state.get("seek_to") is not None:
+                start_position = state["seek_to"]
+                state["seek_to"] = None
+            
+            msg_index = 0
+            
+            # Skip to starting position if needed
+            if start_position > 0:
+                for i, (abs_time_check, msg_check) in enumerate(messages):
+                    if abs_time_check >= start_position:
+                        msg_index = i
+                        break
+                print(f"Seeking to {start_position:.1f}s, starting at message {msg_index}")
+            
+            for i in range(msg_index, len(messages)):
+                abs_time, msg = messages[i]
+
                 if not state["playing"]:
                     break
 
+                # Check for seek request
+                if state.get("seek_to") is not None:
+                    break
+
+                # Handle pause
                 while state["paused"]:
-                    time.sleep(0.1)
-                    if not state["playing"]:
+                    pause_start = time.perf_counter()
+                    while state["paused"] and state["playing"]:
+                        time.sleep(0.05)
+                        if state.get("seek_to") is not None:
+                            break
+                    if state["playing"] and state.get("seek_to") is None:
+                        pause_offset += time.perf_counter() - pause_start
+                    if not state["playing"] or state.get("seek_to") is not None:
                         break
 
+                if not state["playing"] or state.get("seek_to") is not None:
+                    break
+
+                # Update current position
+                state["position"] = abs_time
+
+                # Calculate when this message should play
                 tempo_scale = state["tempo"] / 100
-                volume_scale = state["volume"] / 127
+                adjusted_time = (abs_time - start_position) / tempo_scale
+                target_time = start_time + pause_offset + adjusted_time
+                
+                # Wait until target time
+                now = time.perf_counter()
+                wait_time = target_time - now
+                
+                if wait_time > 0.001:
+                    time.sleep(wait_time)
+                elif wait_time < -0.5:
+                    print(f"Warning: playback {-wait_time:.2f}s behind schedule")
 
-                time.sleep(msg.time / tempo_scale)
-
+                # Send the message (filter by channel if piano_only mode)
                 if not msg.is_meta:
+                    if hasattr(msg, 'channel') and msg.channel not in allowed_channels:
+                        continue
+                    
                     if msg.type == "note_on":
-                        msg.velocity = int(msg.velocity * volume_scale)
+                        volume_scale = state["volume"] / 127
+                        msg = msg.copy(velocity=int(msg.velocity * volume_scale))
+                    
                     port.send(msg)
+
+            # If we broke out due to seek, restart the loop
+            if state.get("seek_to") is not None and state["playing"]:
+                if port:
+                    try:
+                        port.close()
+                    except:
+                        pass
+                continue
+
         except Exception as e:
             print(f"Playback error: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            # Always close the MIDI port
+            if port:
+                try:
+                    port.close()
+                except:
+                    pass
 
         state["index"] += 1
         if state["index"] >= len(state["tracks"]):
             state["playing"] = False
+
+    # Reset position when stopped
+    if not state["playing"]:
+        state["position"] = 0
 
 
 # ============================================================================
@@ -93,8 +245,7 @@ def index():
 @app.route("/next")
 def next_track():
     if state["tracks"]:
-        state["playing"] = False
-        time.sleep(0.1)
+        stop_and_reset()
         state["index"] = min(state["index"] + 1, len(state["tracks"]) - 1)
         state["playing"] = True
         threading.Thread(target=play_loop, daemon=True).start()
@@ -104,8 +255,7 @@ def next_track():
 @app.route("/prev")
 def prev_track():
     if state["tracks"]:
-        state["playing"] = False
-        time.sleep(0.1)
+        stop_and_reset()
         state["index"] = max(state["index"] - 1, 0)
         state["playing"] = True
         threading.Thread(target=play_loop, daemon=True).start()
@@ -128,6 +278,7 @@ def resume():
 def stop():
     state["playing"] = False
     state["paused"] = False
+    send_all_notes_off()
     return ("", 204)
 
 
@@ -147,8 +298,7 @@ def tempo(t):
 def restart_track():
     """Restart the current track from the beginning"""
     if state["tracks"] and state["index"] < len(state["tracks"]):
-        state["playing"] = False
-        time.sleep(0.1)
+        stop_and_reset()
         state["playing"] = True
         threading.Thread(target=play_loop, daemon=True).start()
     return ("", 204)
@@ -159,6 +309,7 @@ def play_folder():
     """Play all files in a folder"""
     data = request.get_json()
     folder_path = data.get("path", "").strip().lstrip('/') if data else ""
+    start_index = data.get("start_index", 0) if data else 0
     
     if '..' in folder_path:
         return {"success": False, "message": "Invalid path"}, 400
@@ -200,16 +351,90 @@ def play_folder():
     sorted_files = sorted(files_dict.keys(), key=sort_key)
     tracks = [files_dict[f] for f in sorted_files]
     
+    # Stop any current playback properly
+    stop_and_reset()
+    
     # Set up playback state
     state["folder"] = folder_path or "Library"
     state["tracks"] = tracks
-    state["index"] = 0
+    state["index"] = min(start_index, len(tracks) - 1) if start_index >= 0 else 0
     state["playing"] = True
     state["paused"] = False
     
     threading.Thread(target=play_loop, daemon=True).start()
     
     return {"success": True, "message": f"Playing {len(tracks)} files"}, 200
+
+
+@app.route("/play_file", methods=["POST"])
+def play_file():
+    """Play a specific file (and continue with folder)"""
+    data = request.get_json()
+    file_path = data.get("path", "").strip().lstrip('/') if data else ""
+    
+    if not file_path or '..' in file_path:
+        return {"success": False, "message": "Invalid path"}, 400
+    
+    # Get the folder containing this file
+    folder_path = os.path.dirname(file_path)
+    filename = os.path.basename(file_path)
+    
+    full_path = os.path.join(MIDI_DIR, folder_path) if folder_path else MIDI_DIR
+    
+    if not os.path.isdir(full_path):
+        return {"success": False, "message": "Folder not found"}, 404
+    
+    # Get files in order (respecting .order.json)
+    files_dict = {}
+    for item in os.listdir(full_path):
+        if item.startswith('.'):
+            continue
+        item_path = os.path.join(full_path, item)
+        if os.path.isfile(item_path) and item.lower().endswith(('.mid', '.midi')):
+            relative_path = os.path.join(folder_path, item).replace('\\', '/') if folder_path else item
+            files_dict[item] = relative_path
+    
+    if not files_dict:
+        return {"success": False, "message": "No MIDI files in folder"}, 400
+    
+    # Load saved order if exists
+    order_file = os.path.join(full_path, ".order.json")
+    saved_order = []
+    if os.path.exists(order_file):
+        try:
+            with open(order_file, 'r') as f:
+                saved_order = json.load(f).get("order", [])
+        except:
+            pass
+    
+    # Sort files by saved order
+    def sort_key(name):
+        if name in saved_order:
+            return (0, saved_order.index(name))
+        return (1, name.lower())
+    
+    sorted_files = sorted(files_dict.keys(), key=sort_key)
+    tracks = [files_dict[f] for f in sorted_files]
+    
+    # Find the index of the clicked file
+    try:
+        start_index = sorted_files.index(filename)
+    except ValueError:
+        return {"success": False, "message": "File not found in folder"}, 404
+    
+    # Stop any current playback properly
+    stop_and_reset()
+    
+    # Set up playback state
+    state["folder"] = folder_path or "Library"
+    state["tracks"] = tracks
+    state["index"] = start_index
+    state["playing"] = True
+    state["paused"] = False
+    
+    threading.Thread(target=play_loop, daemon=True).start()
+    
+    return {"success": True, "message": f"Playing {filename}"}, 200
 
 
 @app.route("/status")
@@ -222,8 +447,173 @@ def status():
         "tracks": state["tracks"],
         "index": state["index"],
         "volume": state["volume"],
-        "tempo": state["tempo"]
+        "tempo": state["tempo"],
+        "piano_only": state.get("piano_only", True),
+        "position": state.get("position", 0),
+        "duration": state.get("duration", 0)
     }
+
+
+@app.route("/seek/<float:position>")
+def seek(position):
+    """Seek to a position in the current track (in seconds)"""
+    if not state["playing"] and not state["paused"]:
+        return {"success": False, "message": "Nothing playing"}, 400
+    
+    duration = state.get("duration", 0)
+    if position < 0:
+        position = 0
+    elif position > duration:
+        position = duration
+    
+    state["seek_to"] = position
+    
+    # If paused, unpause to allow seek to take effect
+    if state["paused"]:
+        state["paused"] = False
+    
+    return {"success": True, "position": position}
+
+
+@app.route("/toggle_piano_only")
+def toggle_piano_only():
+    """Toggle piano-only mode (filter non-piano instruments)"""
+    state["piano_only"] = not state.get("piano_only", True)
+    return {"piano_only": state["piano_only"]}
+
+
+# General MIDI instrument names
+GM_INSTRUMENTS = [
+    "Acoustic Grand Piano", "Bright Acoustic Piano", "Electric Grand Piano", "Honky-tonk Piano",
+    "Electric Piano 1", "Electric Piano 2", "Harpsichord", "Clavinet",
+    "Celesta", "Glockenspiel", "Music Box", "Vibraphone", "Marimba", "Xylophone", "Tubular Bells", "Dulcimer",
+    "Drawbar Organ", "Percussive Organ", "Rock Organ", "Church Organ", "Reed Organ", "Accordion", "Harmonica", "Tango Accordion",
+    "Acoustic Guitar (nylon)", "Acoustic Guitar (steel)", "Electric Guitar (jazz)", "Electric Guitar (clean)",
+    "Electric Guitar (muted)", "Overdriven Guitar", "Distortion Guitar", "Guitar Harmonics",
+    "Acoustic Bass", "Electric Bass (finger)", "Electric Bass (pick)", "Fretless Bass",
+    "Slap Bass 1", "Slap Bass 2", "Synth Bass 1", "Synth Bass 2",
+    "Violin", "Viola", "Cello", "Contrabass", "Tremolo Strings", "Pizzicato Strings", "Orchestral Harp", "Timpani",
+    "String Ensemble 1", "String Ensemble 2", "Synth Strings 1", "Synth Strings 2",
+    "Choir Aahs", "Voice Oohs", "Synth Choir", "Orchestra Hit",
+    "Trumpet", "Trombone", "Tuba", "Muted Trumpet", "French Horn", "Brass Section", "Synth Brass 1", "Synth Brass 2",
+    "Soprano Sax", "Alto Sax", "Tenor Sax", "Baritone Sax", "Oboe", "English Horn", "Bassoon", "Clarinet",
+    "Piccolo", "Flute", "Recorder", "Pan Flute", "Blown Bottle", "Shakuhachi", "Whistle", "Ocarina",
+    "Lead 1 (square)", "Lead 2 (sawtooth)", "Lead 3 (calliope)", "Lead 4 (chiff)", "Lead 5 (charang)",
+    "Lead 6 (voice)", "Lead 7 (fifths)", "Lead 8 (bass + lead)",
+    "Pad 1 (new age)", "Pad 2 (warm)", "Pad 3 (polysynth)", "Pad 4 (choir)", "Pad 5 (bowed)",
+    "Pad 6 (metallic)", "Pad 7 (halo)", "Pad 8 (sweep)",
+    "FX 1 (rain)", "FX 2 (soundtrack)", "FX 3 (crystal)", "FX 4 (atmosphere)",
+    "FX 5 (brightness)", "FX 6 (goblins)", "FX 7 (echoes)", "FX 8 (sci-fi)",
+    "Sitar", "Banjo", "Shamisen", "Koto", "Kalimba", "Bagpipe", "Fiddle", "Shanai",
+    "Tinkle Bell", "Agogo", "Steel Drums", "Woodblock", "Taiko Drum", "Melodic Tom", "Synth Drum", "Reverse Cymbal",
+    "Guitar Fret Noise", "Breath Noise", "Seashore", "Bird Tweet", "Telephone Ring", "Helicopter", "Applause", "Gunshot"
+]
+
+@app.route("/analyze_file", methods=["POST"])
+def analyze_file():
+    """Analyze a MIDI file for potential issues"""
+    data = request.get_json()
+    file_path = data.get("path", "").strip().lstrip('/') if data else ""
+    
+    if not file_path or '..' in file_path:
+        return {"success": False, "message": "Invalid path"}, 400
+    
+    full_path = os.path.join(MIDI_DIR, file_path)
+    
+    if not os.path.exists(full_path):
+        return {"success": False, "message": "File not found"}, 404
+    
+    try:
+        mid = mido.MidiFile(full_path)
+        
+        # Analyze the file
+        info = {
+            "filename": os.path.basename(file_path),
+            "type": mid.type,
+            "type_name": ["Single Track", "Multi-Track Sync", "Multi-Track Async"][mid.type],
+            "ticks_per_beat": mid.ticks_per_beat,
+            "num_tracks": len(mid.tracks),
+            "track_info": [],
+            "total_notes": 0,
+            "duration_seconds": mid.length,
+            "has_piano": False,
+            "piano_channels": [],
+            "warnings": []
+        }
+        
+        for i, track in enumerate(mid.tracks):
+            track_info = {
+                "index": i,
+                "name": None,
+                "channel": None,
+                "program": None,
+                "instrument": None,
+                "is_piano": False,
+                "is_drums": False,
+                "notes": 0,
+                "note_range": None
+            }
+            
+            channels = set()
+            programs = {}
+            note_min, note_max = 127, 0
+            
+            for msg in track:
+                if msg.type == 'track_name':
+                    track_info["name"] = msg.name
+                elif msg.type == 'program_change':
+                    channels.add(msg.channel)
+                    programs[msg.channel] = msg.program
+                elif msg.type == 'note_on' and msg.velocity > 0:
+                    track_info["notes"] += 1
+                    note_min = min(note_min, msg.note)
+                    note_max = max(note_max, msg.note)
+                    if hasattr(msg, 'channel'):
+                        channels.add(msg.channel)
+            
+            # Set channel and instrument info
+            if channels:
+                ch = list(channels)[0]
+                track_info["channel"] = ch
+                if ch == 9:
+                    track_info["is_drums"] = True
+                    track_info["instrument"] = "Drums/Percussion"
+                elif ch in programs:
+                    prog = programs[ch]
+                    track_info["program"] = prog
+                    track_info["instrument"] = GM_INSTRUMENTS[prog] if prog < len(GM_INSTRUMENTS) else f"Program {prog}"
+                    if prog <= 7:
+                        track_info["is_piano"] = True
+                        info["has_piano"] = True
+                        if ch not in info["piano_channels"]:
+                            info["piano_channels"].append(ch)
+            
+            if track_info["notes"] > 0:
+                track_info["note_range"] = f"{note_min}-{note_max}"
+                info["total_notes"] += track_info["notes"]
+            
+            # Only include tracks with notes or names
+            if track_info["notes"] > 0 or track_info["name"]:
+                info["track_info"].append(track_info)
+        
+        # Check for potential issues
+        if info["type"] == 2:
+            info["warnings"].append("Type 2 MIDI (async tracks) may have timing issues")
+        
+        if not info["has_piano"]:
+            info["warnings"].append("No piano tracks found - will play all instruments")
+        
+        # Check tempo
+        for track in mid.tracks:
+            for msg in track:
+                if msg.type == 'set_tempo':
+                    info["tempo_bpm"] = round(mido.tempo2bpm(msg.tempo))
+                    break
+        
+        return {"success": True, "analysis": info}, 200
+        
+    except Exception as e:
+        return {"success": False, "message": f"Error analyzing file: {str(e)}"}, 500
 
 
 # ============================================================================

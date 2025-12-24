@@ -503,16 +503,29 @@ function createFileElement(file) {
   const actions = document.createElement('div');
   actions.className = 'file-actions';
   
+  const infoBtn = document.createElement('button');
+  infoBtn.textContent = 'ℹ️';
+  infoBtn.title = 'File Info';
+  infoBtn.onclick = (e) => { e.stopPropagation(); showFileInfo(file.path); };
+  
   const deleteBtn = document.createElement('button');
   deleteBtn.textContent = '🗑️';
   deleteBtn.title = 'Delete';
   deleteBtn.onclick = (e) => { e.stopPropagation(); deleteFile(file.path); };
   
+  actions.appendChild(infoBtn);
   actions.appendChild(deleteBtn);
   
   div.appendChild(icon);
   div.appendChild(name);
   div.appendChild(actions);
+  
+  // Click to play this file
+  div.onclick = (e) => {
+    // Don't play if clicking on action buttons
+    if (e.target.closest('.file-actions')) return;
+    playFile(file.path);
+  };
   
   // Make draggable and reorder target
   DragDrop.makeDraggable(div, file.path, 'file');
@@ -689,6 +702,21 @@ function setTempo(value) {
   fetch('/tempo/' + value);
 }
 
+function togglePianoOnly() {
+  fetch('/toggle_piano_only')
+  .then(r => r.json())
+  .then(data => {
+    updatePianoOnlyButton(data.piano_only);
+  });
+}
+
+function updatePianoOnlyButton(isOn) {
+  const btn = document.getElementById('pianoOnlyBtn');
+  if (!btn) return;
+  btn.textContent = isOn ? 'ON' : 'OFF';
+  btn.classList.toggle('active', isOn);
+}
+
 function playFolder() {
   if (currentFiles.length === 0) {
     alert('No files in this folder to play');
@@ -699,6 +727,25 @@ function playFolder() {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path: currentPath })
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.success) {
+      isPlaying = true;
+      isPaused = false;
+      updatePlayPauseButton();
+      startStatusPolling();
+    } else {
+      alert('Error: ' + data.message);
+    }
+  });
+}
+
+function playFile(filePath) {
+  fetch('/play_file', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: filePath })
   })
   .then(r => r.json())
   .then(data => {
@@ -783,6 +830,7 @@ function updateStatus() {
     isPlaying = data.playing;
     isPaused = data.paused;
     updatePlayPauseButton();
+    updatePianoOnlyButton(data.piano_only);
     
     if (data.playing && data.tracks && data.tracks.length > 0 && data.index < data.tracks.length) {
       updateNowPlaying(data.tracks[data.index]);
@@ -802,7 +850,192 @@ function updateStatus() {
     if (volValue) volValue.textContent = data.volume;
     if (tempoSlider) tempoSlider.value = data.tempo;
     if (tempoValue) tempoValue.textContent = data.tempo + '%';
+    
+    // Update progress slider
+    updateProgressSlider(data.position || 0, data.duration || 0);
   });
+}
+
+function formatTime(seconds) {
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return mins + ':' + (secs < 10 ? '0' : '') + secs;
+}
+
+function updateProgressSlider(position, duration) {
+  const slider = document.getElementById('progressSlider');
+  const elapsed = document.getElementById('elapsedTime');
+  const total = document.getElementById('totalTime');
+  
+  if (!slider || !elapsed || !total) return;
+  
+  // Don't update if user is dragging
+  if (slider.dataset.dragging === 'true') return;
+  
+  elapsed.textContent = formatTime(position);
+  total.textContent = formatTime(duration);
+  
+  if (duration > 0) {
+    slider.max = duration;
+    slider.value = position;
+  } else {
+    slider.max = 100;
+    slider.value = 0;
+  }
+}
+
+let seekTimeout = null;
+
+function seekTo(position) {
+  // Debounce seek requests
+  if (seekTimeout) clearTimeout(seekTimeout);
+  seekTimeout = setTimeout(() => {
+    fetch('/seek/' + position)
+    .then(r => r.json())
+    .then(data => {
+      if (!data.success) {
+        console.log('Seek failed:', data.message);
+      }
+    });
+  }, 100);
+}
+
+function setupProgressSlider() {
+  const slider = document.getElementById('progressSlider');
+  if (!slider) return;
+  
+  slider.addEventListener('mousedown', () => {
+    slider.dataset.dragging = 'true';
+  });
+  
+  slider.addEventListener('touchstart', () => {
+    slider.dataset.dragging = 'true';
+  });
+  
+  slider.addEventListener('mouseup', () => {
+    slider.dataset.dragging = 'false';
+    seekTo(parseFloat(slider.value));
+  });
+  
+  slider.addEventListener('touchend', () => {
+    slider.dataset.dragging = 'false';
+    seekTo(parseFloat(slider.value));
+  });
+  
+  slider.addEventListener('input', () => {
+    // Update time display while dragging
+    const elapsed = document.getElementById('elapsedTime');
+    if (elapsed) {
+      elapsed.textContent = formatTime(parseFloat(slider.value));
+    }
+  });
+}
+
+// ============================================================================
+// File Info Modal
+// ============================================================================
+
+function showFileInfo(filePath) {
+  const modal = document.getElementById('fileInfoModal');
+  const overlay = document.getElementById('modalOverlay');
+  const title = document.getElementById('fileInfoTitle');
+  const content = document.getElementById('fileInfoContent');
+  
+  title.textContent = filePath.split('/').pop();
+  content.innerHTML = '<p style="text-align:center;">Loading...</p>';
+  
+  modal.style.display = 'block';
+  overlay.style.display = 'block';
+  
+  fetch('/analyze_file', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: filePath })
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.success) {
+      content.innerHTML = renderFileInfo(data.analysis);
+    } else {
+      content.innerHTML = '<p class="error">Error: ' + data.message + '</p>';
+    }
+  })
+  .catch(err => {
+    content.innerHTML = '<p class="error">Error loading file info</p>';
+  });
+}
+
+function renderFileInfo(info) {
+  let html = '<div class="info-grid">';
+  
+  // Basic info
+  html += '<div class="info-section">';
+  html += '<h4>📋 General</h4>';
+  html += '<table class="info-table">';
+  html += `<tr><td>Duration</td><td>${formatTime(info.duration_seconds)}</td></tr>`;
+  html += `<tr><td>Type</td><td>${info.type_name}</td></tr>`;
+  html += `<tr><td>Tracks</td><td>${info.num_tracks}</td></tr>`;
+  html += `<tr><td>Total Notes</td><td>${info.total_notes.toLocaleString()}</td></tr>`;
+  if (info.tempo_bpm) {
+    html += `<tr><td>Tempo</td><td>${info.tempo_bpm} BPM</td></tr>`;
+  }
+  html += '</table>';
+  html += '</div>';
+  
+  // Piano info
+  html += '<div class="info-section">';
+  html += '<h4>🎹 Piano</h4>';
+  if (info.has_piano) {
+    html += `<p class="status-good">✅ Piano tracks found (Ch: ${info.piano_channels.join(', ')})</p>`;
+  } else {
+    html += '<p class="status-warn">⚠️ No piano tracks - will play all instruments</p>';
+  }
+  html += '</div>';
+  
+  // Warnings
+  if (info.warnings && info.warnings.length > 0) {
+    html += '<div class="info-section warnings">';
+    html += '<h4>⚠️ Warnings</h4>';
+    info.warnings.forEach(w => {
+      html += `<p class="warning-item">${w}</p>`;
+    });
+    html += '</div>';
+  }
+  
+  html += '</div>';
+  
+  // Track list
+  html += '<div class="info-section">';
+  html += '<h4>🎼 Tracks</h4>';
+  html += '<table class="tracks-table">';
+  html += '<tr><th>Ch</th><th>Instrument</th><th>Notes</th><th>Range</th></tr>';
+  
+  info.track_info.forEach(track => {
+    if (track.notes > 0) {
+      let rowClass = '';
+      if (track.is_piano) rowClass = 'piano-track';
+      else if (track.is_drums) rowClass = 'drums-track';
+      
+      const name = track.name ? `<br><small>${track.name}</small>` : '';
+      html += `<tr class="${rowClass}">`;
+      html += `<td>${track.channel !== null ? track.channel : '-'}</td>`;
+      html += `<td>${track.instrument || 'Unknown'}${name}</td>`;
+      html += `<td>${track.notes.toLocaleString()}</td>`;
+      html += `<td>${track.note_range || '-'}</td>`;
+      html += '</tr>';
+    }
+  });
+  
+  html += '</table>';
+  html += '</div>';
+  
+  return html;
+}
+
+function closeAllModals() {
+  document.querySelectorAll('.modal').forEach(m => m.style.display = 'none');
+  const overlay = document.getElementById('modalOverlay');
+  if (overlay) overlay.style.display = 'none';
 }
 
 // ============================================================================
@@ -813,5 +1046,6 @@ document.addEventListener('DOMContentLoaded', function() {
   loadFolderTree();
   loadFiles('');
   setupFileContainerDrop();
+  setupProgressSlider();
   updateStatus();
 });

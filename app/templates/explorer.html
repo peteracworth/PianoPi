@@ -48,6 +48,10 @@
           <input type="range" id="tempoSlider" min="25" max="200" value="100" oninput="setTempo(this.value)">
           <span id="tempoValue">100%</span>
         </div>
+        <div class="control-group">
+          <label>🎹 Piano Only</label>
+          <button id="pianoOnlyBtn" class="toggle-btn active" onclick="togglePianoOnly()" title="Filter to piano tracks only">ON</button>
+        </div>
       </div>
       <div class="media-controls">
         <button class="media-btn" onclick="skipBack()" title="Previous Track">
@@ -66,6 +70,11 @@
         <button class="media-btn" onclick="skipForward()" title="Next Track">
           <svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
         </button>
+      </div>
+      <div class="progress-container">
+        <span id="elapsedTime">0:00</span>
+        <input type="range" id="progressSlider" min="0" max="100" value="0" step="0.1">
+        <span id="totalTime">0:00</span>
       </div>
       <div class="now-playing">
         <span id="nowPlayingLabel">Stopped</span>
@@ -97,6 +106,17 @@
     <button onclick="document.getElementById('renameFolderModal').style.display='none'" style="background-color: #ccc;">Cancel</button>
   </div>
 </div>
+
+<div id="fileInfoModal" class="modal file-info-modal">
+  <div class="modal-header">
+    <h3 id="fileInfoTitle">File Info</h3>
+    <button class="modal-close" onclick="document.getElementById('fileInfoModal').style.display='none'">&times;</button>
+  </div>
+  <div id="fileInfoContent" class="file-info-content">
+    Loading...
+  </div>
+</div>
+<div id="modalOverlay" class="modal-overlay" onclick="closeAllModals()"></div>
 {% endblock %}
 
 {% block scripts %}
