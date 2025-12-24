@@ -6,6 +6,7 @@
 <div class="header">
   <h1>🎹 Music Library</h1>
   <div class="header-buttons">
+    <button class="btn-reset-prodigy" onclick="if(confirm('Send reset commands to Prodigy 2?')) window.location.href='/reset_prodigy'">🎹 Reset Prodigy</button>
     <button class="btn-restart" onclick="if(confirm('Restart MIDI server?')) window.location.href='/reboot_midi_server'">🔄 Restart Server</button>
     <button class="btn-reboot" onclick="if(confirm('Reboot Raspberry Pi?')) window.location.href='/reboot_raspberry'">🔴 Reboot Pi</button>
   </div>

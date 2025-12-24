@@ -35,6 +35,7 @@ body {
 /* Button Colors */
 .btn-reboot { background-color: #ff4444; }
 .btn-restart { background-color: #4444ff; }
+.btn-reset-prodigy { background-color: #FF8C00; }
 .btn-player { background-color: #44ff44; }
 .btn-create { background-color: #44ff44; color: white; }
 .btn-edit { background-color: #4444ff; color: white; }

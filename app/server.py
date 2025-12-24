@@ -999,6 +999,100 @@ def reboot_midi_server():
     return redirect("/")
 
 
+@app.route("/reset_prodigy")
+def reset_prodigy():
+    """
+    Attempt to reset the Prodigy 2 MIDI device without power cycling.
+    Sends various MIDI reset messages to recover from a stuck state.
+    """
+    # Stop any current playback first
+    state["playing"] = False
+    state["paused"] = False
+    time.sleep(0.2)
+    
+    try:
+        port = mido.open_output(MIDI_PORT)
+        
+        # Step 1: All Notes Off on all channels (CC 123)
+        for channel in range(16):
+            port.send(mido.Message('control_change', channel=channel, control=123, value=0))
+        time.sleep(0.05)
+        
+        # Step 2: All Sound Off on all channels (CC 120)
+        for channel in range(16):
+            port.send(mido.Message('control_change', channel=channel, control=120, value=0))
+        time.sleep(0.05)
+        
+        # Step 3: Reset All Controllers on all channels (CC 121)
+        for channel in range(16):
+            port.send(mido.Message('control_change', channel=channel, control=121, value=0))
+        time.sleep(0.05)
+        
+        # Step 4: Send MIDI System Reset (0xFF)
+        # This is a system realtime message that tells devices to reset to power-on state
+        try:
+            port.send(mido.Message('reset'))
+        except Exception as e:
+            print(f"System Reset not supported: {e}")
+        
+        port.close()
+        
+        # Step 5: Try USB device reset as fallback
+        try:
+            # Find and reset USB MIDI device
+            usb_reset_result = reset_usb_midi_device()
+            if usb_reset_result:
+                print("USB MIDI device reset successful")
+        except Exception as e:
+            print(f"USB reset failed or not available: {e}")
+        
+        return "<html><body><h2>✅ Reset commands sent to Prodigy 2</h2><p>If the device is still unresponsive, a power cycle may be required.</p><a href='/'>← Back to Library</a></body></html>", 200
+        
+    except Exception as e:
+        return f"<html><body><h2>❌ Reset failed</h2><p>Error: {e}</p><a href='/'>← Back to Library</a></body></html>", 500
+
+
+def reset_usb_midi_device():
+    """
+    Attempt to reset USB MIDI device by finding it and triggering a USB reset.
+    This forces the device to re-enumerate.
+    """
+    try:
+        import usb.core
+        import usb.util
+        
+        # Find USB MIDI devices (class 1 = Audio, subclass 3 = MIDI Streaming)
+        # Also look for common MIDI device vendor IDs
+        devices = list(usb.core.find(find_all=True, bDeviceClass=0x01))
+        
+        if not devices:
+            # Try finding by interface class instead
+            devices = list(usb.core.find(find_all=True))
+            devices = [d for d in devices if any(
+                getattr(cfg, 'bInterfaceClass', 0) == 1 
+                for cfg in d.configurations() 
+                for intf in cfg.interfaces() 
+                for alt in intf
+            )]
+        
+        for device in devices:
+            try:
+                print(f"Resetting USB device: {device.idVendor:04x}:{device.idProduct:04x}")
+                device.reset()
+                return True
+            except Exception as e:
+                print(f"Could not reset device: {e}")
+                continue
+        
+        return False
+    except ImportError:
+        print("pyusb not installed - USB reset not available")
+        return False
+    except Exception as e:
+        print(f"USB reset error: {e}")
+        return False
+
+
 # ============================================================================
 # Main
 # ============================================================================
