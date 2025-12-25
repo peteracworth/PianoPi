@@ -2,6 +2,8 @@
 
 let currentPath = '';
 let folderCache = {};  // Cache folder contents to avoid refetching
+let favorites = new Set();  // Set of favorited file paths
+let showFavoritesOnly = false;  // Filter mode
 
 // ============================================================================
 // Unified Drag-Drop System
@@ -430,18 +432,22 @@ function createFileElement(file) {
   div.className = 'file-item';
   div.dataset.path = file.path;
   
+  const isFavorite = favorites.has(file.path);
+  
   div.innerHTML = `
     <span class="file-icon">🎵</span>
     <span class="file-name">${escapeHtml(file.name)}</span>
     <div class="file-actions">
+      <button class="favorite-btn ${isFavorite ? 'active' : ''}" title="Favorite">${isFavorite ? '❤️' : '🤍'}</button>
       <button title="File Info">ℹ️</button>
       <button title="Delete">🗑️</button>
     </div>
   `;
   
   const buttons = div.querySelectorAll('button');
-  buttons[0].onclick = (e) => { e.stopPropagation(); showFileInfo(file.path); };
-  buttons[1].onclick = (e) => { e.stopPropagation(); deleteFile(file.path); };
+  buttons[0].onclick = (e) => { e.stopPropagation(); toggleFavorite(file.path, buttons[0]); };
+  buttons[1].onclick = (e) => { e.stopPropagation(); showFileInfo(file.path); };
+  buttons[2].onclick = (e) => { e.stopPropagation(); deleteFile(file.path); };
   
   div.onclick = (e) => {
     if (e.target.closest('.file-actions')) return;
@@ -917,10 +923,87 @@ function closeAllModals() {
 }
 
 // ============================================================================
+// Favorites
+// ============================================================================
+
+async function loadFavorites() {
+  try {
+    const response = await fetch('/favorites');
+    const data = await response.json();
+    if (data.success) {
+      favorites = new Set(data.favorites);
+    }
+  } catch (error) {
+    console.error('Error loading favorites:', error);
+  }
+}
+
+function toggleFavorite(filePath, button) {
+  fetch('/favorite', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: filePath })
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.success) {
+      if (data.is_favorite) {
+        favorites.add(filePath);
+        button.textContent = '❤️';
+        button.classList.add('active');
+      } else {
+        favorites.delete(filePath);
+        button.textContent = '🤍';
+        button.classList.remove('active');
+        
+        // If showing favorites only and we just unfavorited, refresh
+        if (showFavoritesOnly) {
+          loadFiles(currentPath);
+        }
+      }
+    }
+  });
+}
+
+function toggleFavoritesFilter() {
+  showFavoritesOnly = !showFavoritesOnly;
+  
+  const btn = document.getElementById('favoritesFilterBtn');
+  if (btn) {
+    btn.classList.toggle('active', showFavoritesOnly);
+    btn.querySelector('.heart').textContent = showFavoritesOnly ? '❤️' : '♡';
+  }
+  
+  // Update header
+  const header = document.getElementById('currentFolderName');
+  if (header) {
+    if (showFavoritesOnly) {
+      header.textContent = '❤️ Favorites';
+    } else {
+      header.textContent = currentPath ? '🎵 ' + currentPath.split('/').pop() : '🎵 All Files';
+    }
+  }
+  
+  loadFiles(currentPath);
+}
+
+// Override renderFiles to filter by favorites if needed
+const originalRenderFiles = renderFiles;
+renderFiles = function(files, folders) {
+  if (showFavoritesOnly) {
+    // Filter to only show favorited files
+    files = files.filter(f => favorites.has(f.path));
+    folders = []; // Hide folders in favorites view
+  }
+  originalRenderFiles(files, folders);
+};
+
+// ============================================================================
 // Initialize
 // ============================================================================
 
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', async function() {
+  await loadFavorites();
   loadFolderTree();
   loadFiles('');
   setupFileContainerDrop();

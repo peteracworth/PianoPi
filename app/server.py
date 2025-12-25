@@ -846,6 +846,54 @@ def delete_file():
         return {"success": False, "message": str(e)}, 500
 
 
+# ============================================================================
+# Favorites
+# ============================================================================
+
+FAVORITES_FILE = os.path.join(BASE_DIR, "favorites.json")
+
+def load_favorites():
+    """Load favorites from JSON file"""
+    if os.path.exists(FAVORITES_FILE):
+        try:
+            with open(FAVORITES_FILE, 'r') as f:
+                return set(json.load(f))
+        except:
+            pass
+    return set()
+
+def save_favorites(favorites):
+    """Save favorites to JSON file"""
+    with open(FAVORITES_FILE, 'w') as f:
+        json.dump(list(favorites), f)
+
+@app.route("/favorites", methods=["GET"])
+def get_favorites():
+    """Get list of favorited files"""
+    favorites = load_favorites()
+    return {"success": True, "favorites": list(favorites)}, 200
+
+@app.route("/favorite", methods=["POST"])
+def toggle_favorite():
+    """Toggle favorite status for a file"""
+    data = request.get_json()
+    if not data or "path" not in data:
+        return {"success": False, "message": "Invalid request"}, 400
+    
+    file_path = data["path"].strip()
+    favorites = load_favorites()
+    
+    if file_path in favorites:
+        favorites.remove(file_path)
+        is_favorite = False
+    else:
+        favorites.add(file_path)
+        is_favorite = True
+    
+    save_favorites(favorites)
+    return {"success": True, "is_favorite": is_favorite}, 200
+
+
 @app.route("/move_folder", methods=["POST"])
 def move_folder():
     """Move a folder into another folder"""

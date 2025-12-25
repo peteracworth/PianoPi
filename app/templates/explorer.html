@@ -32,8 +32,13 @@
         <button class="btn-new-folder" onclick="showCreateFolder()">+ New Folder</button>
       </div>
     </div>
-    <div id="breadcrumbs" class="breadcrumbs">
-      <a href="#" class="breadcrumb-item" onclick="navigateToFolder(''); return false;">📁 Library</a>
+    <div class="breadcrumbs-row">
+      <div id="breadcrumbs" class="breadcrumbs">
+        <a href="#" class="breadcrumb-item" onclick="navigateToFolder(''); return false;">📁 Library</a>
+      </div>
+      <button id="favoritesFilterBtn" class="favorites-filter-btn" onclick="toggleFavoritesFilter()" title="Show favorites only">
+        <span class="heart">♡</span>
+      </button>
     </div>
     
     <!-- Playback Controls -->
