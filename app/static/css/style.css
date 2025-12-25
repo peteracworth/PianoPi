@@ -785,7 +785,7 @@ body {
   margin-bottom: 0;
 }
 
-.favorites-filter-btn {
+.nav-filter-btn, .favorites-filter-btn {
   padding: 8px 12px;
   border: 2px solid #ddd;
   border-radius: 8px;
@@ -793,6 +793,11 @@ body {
   cursor: pointer;
   font-size: 1.2em;
   transition: all 0.2s;
+}
+
+.nav-filter-btn:hover {
+  border-color: #4CAF50;
+  background-color: #f0fff0;
 }
 
 .favorites-filter-btn:hover {

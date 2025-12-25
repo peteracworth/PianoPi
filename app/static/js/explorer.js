@@ -982,6 +982,36 @@ function toggleFavorite(filePath, button) {
   });
 }
 
+function goToPlayingTrack() {
+  // Get current playing track from status
+  fetch('/status')
+  .then(r => r.json())
+  .then(data => {
+    if (data.playing && data.tracks && data.tracks.length > 0 && data.index < data.tracks.length) {
+      const currentTrack = data.tracks[data.index];
+      // Get the folder path (everything before the last /)
+      const folderPath = currentTrack.includes('/') 
+        ? currentTrack.substring(0, currentTrack.lastIndexOf('/'))
+        : '';
+      
+      // Turn off favorites filter if active
+      if (showFavoritesOnly) {
+        showFavoritesOnly = false;
+        const btn = document.getElementById('favoritesFilterBtn');
+        if (btn) {
+          btn.classList.remove('active');
+          btn.querySelector('.heart').textContent = '♡';
+        }
+      }
+      
+      // Navigate to the folder
+      selectFolder(folderPath);
+    } else {
+      alert('No track is currently playing');
+    }
+  });
+}
+
 function toggleFavoritesFilter() {
   showFavoritesOnly = !showFavoritesOnly;
   
