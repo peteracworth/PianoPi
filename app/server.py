@@ -291,9 +291,24 @@ def next_track():
 def prev_track():
     with playback_lock:
         if state["tracks"]:
+            current_position = state["position"]
+            current_index = state["index"]
+            
             stop_and_reset()
-            state["index"] = max(state["index"] - 1, 0)
-            print(f"prev_track: starting track {state['index']}")
+            
+            # If more than 5 seconds into the song, restart current track
+            # If within first 5 seconds, go to previous track (unless on first track)
+            if current_position > 5 and current_index < len(state["tracks"]):
+                # Restart current track
+                print(f"prev_track: restarting current track {current_index} (was {current_position:.1f}s in)")
+            elif current_index > 0:
+                # Go to previous track
+                state["index"] = current_index - 1
+                print(f"prev_track: going to previous track {state['index']} (was only {current_position:.1f}s in)")
+            else:
+                # On first track, just restart it
+                print(f"prev_track: restarting first track (was {current_position:.1f}s in)")
+            
             threading.Thread(target=play_loop, daemon=True).start()
     return ("", 204)
 
