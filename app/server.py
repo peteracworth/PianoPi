@@ -30,8 +30,12 @@ state = {
     "piano_only": True,  # Filter to piano channels only
     "position": 0,       # Current position in seconds
     "duration": 0,       # Total duration in seconds
-    "seek_to": None      # Target position for seeking (None = no seek)
+    "seek_to": None,     # Target position for seeking (None = no seek)
+    "thread_active": False  # Track if playback thread is running
 }
+
+# Lock to prevent race conditions when starting/stopping playback
+playback_lock = threading.Lock()
 
 
 # ============================================================================
@@ -53,16 +57,26 @@ def send_all_notes_off():
 
 
 def stop_and_reset():
-    """Stop current playback and wait for it to finish"""
-    if state["playing"]:
-        state["playing"] = False
-        state["paused"] = False
-        # Wait for playback thread to notice and stop
-        time.sleep(0.3)
-        # Send all notes off to silence any stuck notes
-        send_all_notes_off()
-        # Brief pause before new playback
+    """Stop current playback, wait for thread to finish, then pause before new playback"""
+    print("stop_and_reset: stopping playback...")
+    state["playing"] = False
+    state["paused"] = False
+    
+    # Wait for playback thread to fully stop
+    wait_count = 0
+    while state["thread_active"] and wait_count < 20:
         time.sleep(0.1)
+        wait_count += 1
+    
+    if state["thread_active"]:
+        print("Warning: playback thread did not stop in time")
+    
+    # Send all notes off to silence any stuck notes
+    send_all_notes_off()
+    
+    # 1 second pause before new playback as requested
+    print("stop_and_reset: pausing 1 second before new playback...")
+    time.sleep(1.0)
 
 
 def get_piano_channels(mid):
@@ -96,7 +110,9 @@ def get_piano_channels(mid):
 
 def play_loop():
     """Main playback loop using mido's play() for accurate timing"""
+    state["thread_active"] = True
     state["playing"] = True
+    print(f"play_loop: starting playback, index={state['index']}")
 
     while state["playing"]:
         if state["index"] >= len(state["tracks"]):
@@ -238,6 +254,9 @@ def play_loop():
     # Reset position when stopped
     if not state["playing"]:
         state["position"] = 0
+    
+    state["thread_active"] = False
+    print("play_loop: thread ending")
 
 
 # ============================================================================
@@ -256,21 +275,23 @@ def index():
 
 @app.route("/next")
 def next_track():
-    if state["tracks"]:
-        stop_and_reset()
-        state["index"] = min(state["index"] + 1, len(state["tracks"]) - 1)
-        state["playing"] = True
-        threading.Thread(target=play_loop, daemon=True).start()
+    with playback_lock:
+        if state["tracks"]:
+            stop_and_reset()
+            state["index"] = min(state["index"] + 1, len(state["tracks"]) - 1)
+            print(f"next_track: starting track {state['index']}")
+            threading.Thread(target=play_loop, daemon=True).start()
     return ("", 204)
 
 
 @app.route("/prev")
 def prev_track():
-    if state["tracks"]:
-        stop_and_reset()
-        state["index"] = max(state["index"] - 1, 0)
-        state["playing"] = True
-        threading.Thread(target=play_loop, daemon=True).start()
+    with playback_lock:
+        if state["tracks"]:
+            stop_and_reset()
+            state["index"] = max(state["index"] - 1, 0)
+            print(f"prev_track: starting track {state['index']}")
+            threading.Thread(target=play_loop, daemon=True).start()
     return ("", 204)
 
 
@@ -309,10 +330,11 @@ def tempo(t):
 @app.route("/restart")
 def restart_track():
     """Restart the current track from the beginning"""
-    if state["tracks"] and state["index"] < len(state["tracks"]):
-        stop_and_reset()
-        state["playing"] = True
-        threading.Thread(target=play_loop, daemon=True).start()
+    with playback_lock:
+        if state["tracks"] and state["index"] < len(state["tracks"]):
+            stop_and_reset()
+            print(f"restart_track: restarting track {state['index']}")
+            threading.Thread(target=play_loop, daemon=True).start()
     return ("", 204)
 
 
@@ -363,17 +385,18 @@ def play_folder():
     sorted_files = sorted(files_dict.keys(), key=sort_key)
     tracks = [files_dict[f] for f in sorted_files]
     
-    # Stop any current playback properly
-    stop_and_reset()
-    
-    # Set up playback state
-    state["folder"] = folder_path or "Library"
-    state["tracks"] = tracks
-    state["index"] = min(start_index, len(tracks) - 1) if start_index >= 0 else 0
-    state["playing"] = True
-    state["paused"] = False
-    
-    threading.Thread(target=play_loop, daemon=True).start()
+    with playback_lock:
+        # Stop any current playback properly
+        stop_and_reset()
+        
+        # Set up playback state
+        state["folder"] = folder_path or "Library"
+        state["tracks"] = tracks
+        state["index"] = min(start_index, len(tracks) - 1) if start_index >= 0 else 0
+        state["paused"] = False
+        
+        print(f"play_folder: starting playback of {len(tracks)} files")
+        threading.Thread(target=play_loop, daemon=True).start()
     
     return {"success": True, "message": f"Playing {len(tracks)} files"}, 200
 
@@ -434,17 +457,18 @@ def play_file():
     except ValueError:
         return {"success": False, "message": "File not found in folder"}, 404
     
-    # Stop any current playback properly
-    stop_and_reset()
-    
-    # Set up playback state
-    state["folder"] = folder_path or "Library"
-    state["tracks"] = tracks
-    state["index"] = start_index
-    state["playing"] = True
-    state["paused"] = False
-    
-    threading.Thread(target=play_loop, daemon=True).start()
+    with playback_lock:
+        # Stop any current playback properly
+        stop_and_reset()
+        
+        # Set up playback state
+        state["folder"] = folder_path or "Library"
+        state["tracks"] = tracks
+        state["index"] = start_index
+        state["paused"] = False
+        
+        print(f"play_file: starting playback of {filename}")
+        threading.Thread(target=play_loop, daemon=True).start()
     
     return {"success": True, "message": f"Playing {filename}"}, 200
 
