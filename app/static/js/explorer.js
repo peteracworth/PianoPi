@@ -990,6 +990,9 @@ function toggleThumbsdown(filePath, button, fileElement) {
         button.textContent = '👎';
         button.classList.add('active');
         fileElement.classList.add('thumbsdown');
+        
+        // Skip to next song after thumbs-downing
+        skipForward();
       } else {
         thumbsdown.delete(filePath);
         button.textContent = '👎🏻';
