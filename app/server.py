@@ -25,7 +25,7 @@ state = {
     "index": 0,
     "playing": False,
     "paused": False,
-    "volume": 100,
+    "volume": 15,
     "tempo": 100,
     "piano_only": True,  # Filter to piano channels only
     "position": 0,       # Current position in seconds
