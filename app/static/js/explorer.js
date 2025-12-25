@@ -417,6 +417,11 @@ function renderFiles(files, folders) {
   
   folders.forEach(folder => container.appendChild(createFolderElement(folder)));
   files.forEach(file => container.appendChild(createFileElement(file)));
+  
+  // Re-apply playing highlight after rendering
+  if (currentlyPlayingPath) {
+    highlightPlayingFile(currentlyPlayingPath);
+  }
 }
 
 function createFolderElement(folder) {
@@ -646,6 +651,7 @@ let currentFiles = [];
 let isPlaying = false;
 let isPaused = false;
 let statusInterval = null;
+let currentlyPlayingPath = null;  // Track currently playing file for highlighting
 
 function setVolume(value) {
   document.getElementById('volumeValue').textContent = value;
@@ -784,9 +790,15 @@ function updateStatus() {
     updatePianoOnlyButton(data.piano_only);
     
     if (data.playing && data.tracks && data.tracks.length > 0 && data.index < data.tracks.length) {
-      updateNowPlaying(data.tracks[data.index]);
-      highlightPlayingFile(data.tracks[data.index]);
+      currentlyPlayingPath = data.tracks[data.index];
+      updateNowPlaying(currentlyPlayingPath);
+      highlightPlayingFile(currentlyPlayingPath);
+      // Start polling if not already polling (e.g. page load while playing)
+      if (!statusInterval) {
+        statusInterval = setInterval(updateStatus, 1000);
+      }
     } else if (!data.playing) {
+      currentlyPlayingPath = null;
       updateNowPlaying(null);
       highlightPlayingFile(null);
       if (statusInterval) { clearInterval(statusInterval); statusInterval = null; }
