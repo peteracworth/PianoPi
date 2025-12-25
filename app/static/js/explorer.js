@@ -958,7 +958,7 @@ function toggleFavorite(filePath, button) {
         
         // If showing favorites only and we just unfavorited, refresh
         if (showFavoritesOnly) {
-          loadFiles(currentPath);
+          showAllFavorites();
         }
       }
     }
@@ -974,29 +974,46 @@ function toggleFavoritesFilter() {
     btn.querySelector('.heart').textContent = showFavoritesOnly ? '❤️' : '♡';
   }
   
-  // Update header
+  // Update header and breadcrumbs
   const header = document.getElementById('currentFolderName');
-  if (header) {
-    if (showFavoritesOnly) {
-      header.textContent = '❤️ Favorites';
-    } else {
-      header.textContent = currentPath ? '🎵 ' + currentPath.split('/').pop() : '🎵 All Files';
-    }
-  }
+  const breadcrumbs = document.getElementById('breadcrumbs');
   
-  loadFiles(currentPath);
+  if (showFavoritesOnly) {
+    if (header) header.textContent = '❤️ Favorites';
+    if (breadcrumbs) breadcrumbs.innerHTML = '<span class="breadcrumb-item">❤️ All Favorites</span>';
+    showAllFavorites();
+  } else {
+    if (header) header.textContent = currentPath ? '🎵 ' + currentPath.split('/').pop() : '🎵 All Files';
+    updateBreadcrumbs(currentPath);
+    loadFiles(currentPath);
+  }
 }
 
-// Override renderFiles to filter by favorites if needed
-const originalRenderFiles = renderFiles;
-renderFiles = function(files, folders) {
-  if (showFavoritesOnly) {
-    // Filter to only show favorited files
-    files = files.filter(f => favorites.has(f.path));
-    folders = []; // Hide folders in favorites view
+function showAllFavorites() {
+  const container = document.getElementById('fileContainer');
+  if (!container) return;
+  
+  if (favorites.size === 0) {
+    container.innerHTML = '<p class="empty-message">No favorites yet.<br><span style="font-size: 0.9em; color: #888;">Click the 🤍 on any track to add it to favorites</span></p>';
+    return;
   }
-  originalRenderFiles(files, folders);
-};
+  
+  // Create file objects from all favorites
+  const files = Array.from(favorites).map(path => ({
+    path: path,
+    name: path.split('/').pop()
+  }));
+  
+  // Sort alphabetically
+  files.sort((a, b) => a.name.localeCompare(b.name));
+  
+  // Update currentFiles for playback
+  currentFiles = files.map(f => f.path);
+  
+  // Render
+  container.innerHTML = '';
+  files.forEach(file => container.appendChild(createFileElement(file)));
+}
 
 // ============================================================================
 // Initialize
