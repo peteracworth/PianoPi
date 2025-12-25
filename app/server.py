@@ -31,7 +31,8 @@ state = {
     "position": 0,       # Current position in seconds
     "duration": 0,       # Total duration in seconds
     "seek_to": None,     # Target position for seeking (None = no seek)
-    "thread_active": False  # Track if playback thread is running
+    "thread_active": False,  # Track if playback thread is running
+    "force_play_current": False  # Bypass thumbsdown check for explicit plays
 }
 
 # Lock to prevent race conditions when starting/stopping playback
@@ -123,11 +124,14 @@ def play_loop():
 
         track = state["tracks"][state["index"]]
         
-        # Skip thumbs-downed tracks
-        if track in thumbsdown:
+        # Skip thumbs-downed tracks (unless force_play_current is set)
+        if track in thumbsdown and not state.get("force_play_current", False):
             print(f"play_loop: skipping thumbs-downed track {track}")
             state["index"] += 1
             continue
+        
+        # Reset force_play_current after checking
+        state["force_play_current"] = False
         
         path = os.path.join(MIDI_DIR, track)
         port = None
@@ -493,6 +497,7 @@ def play_file():
         state["tracks"] = tracks
         state["index"] = start_index
         state["paused"] = False
+        state["force_play_current"] = True  # Allow explicit play of thumbs-downed song
         
         print(f"play_file: starting playback of {filename}")
         threading.Thread(target=play_loop, daemon=True).start()

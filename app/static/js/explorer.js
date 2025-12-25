@@ -1003,8 +1003,10 @@ function toggleThumbsdown(filePath, button, fileElement) {
         button.classList.add('active');
         fileElement.classList.add('thumbsdown');
         
-        // Skip to next song after thumbs-downing
-        skipForward();
+        // Only skip if this is the currently playing song
+        if (currentlyPlayingPath === filePath) {
+          skipForward();
+        }
       } else {
         thumbsdown.delete(filePath);
         button.textContent = '👎🏻';
