@@ -247,9 +247,12 @@ def play_loop():
                 except:
                     pass
 
-        state["index"] += 1
-        if state["index"] >= len(state["tracks"]):
-            state["playing"] = False
+        # Only advance to next track if song completed naturally (not stopped by user)
+        if state["playing"]:
+            state["index"] += 1
+            if state["index"] >= len(state["tracks"]):
+                state["playing"] = False
+                print("play_loop: reached end of playlist")
 
     # Reset position when stopped
     if not state["playing"]:
