@@ -696,6 +696,20 @@ body {
   border-color: #99b3ff;
 }
 
+.file-item.parent-folder {
+  background-color: #f0f0f0;
+  border-style: dashed;
+}
+
+.file-item.parent-folder:hover {
+  background-color: #e0e0e0;
+}
+
+.file-item.parent-folder .file-name {
+  font-weight: bold;
+  color: #666;
+}
+
 .file-item.dragging {
   opacity: 0.5;
 }

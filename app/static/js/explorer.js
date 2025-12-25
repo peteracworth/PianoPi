@@ -392,7 +392,24 @@ function renderFiles(files, folders) {
   
   currentFiles = files.map(f => f.path);
   
-  if (files.length === 0 && folders.length === 0) {
+  // Add ".." parent folder link if not at root
+  if (currentPath) {
+    const parentDiv = document.createElement('div');
+    parentDiv.className = 'file-item folder-item parent-folder';
+    parentDiv.innerHTML = `
+      <span class="file-icon">📁</span>
+      <span class="file-name">..</span>
+    `;
+    parentDiv.onclick = () => {
+      const parentPath = currentPath.includes('/') 
+        ? currentPath.substring(0, currentPath.lastIndexOf('/'))
+        : '';
+      selectFolder(parentPath);
+    };
+    container.appendChild(parentDiv);
+  }
+  
+  if (files.length === 0 && folders.length === 0 && !currentPath) {
     container.innerHTML = '<p class="empty-message">This folder is empty.<br><span style="font-size: 0.9em; color: #888;">Drop MIDI files here to upload</span></p>';
     return;
   }
