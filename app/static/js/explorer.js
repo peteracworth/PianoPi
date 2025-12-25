@@ -3,6 +3,7 @@
 let currentPath = '';
 let folderCache = {};  // Cache folder contents to avoid refetching
 let favorites = new Set();  // Set of favorited file paths
+let thumbsdown = new Set();  // Set of thumbs-downed file paths
 let showFavoritesOnly = false;  // Filter mode
 
 // ============================================================================
@@ -450,12 +451,19 @@ function createFileElement(file) {
   div.dataset.path = file.path;
   
   const isFavorite = favorites.has(file.path);
+  const isThumbsdown = thumbsdown.has(file.path);
+  
+  // Add visual indicator for thumbs-downed files
+  if (isThumbsdown) {
+    div.classList.add('thumbsdown');
+  }
   
   div.innerHTML = `
     <span class="file-icon">🎵</span>
     <span class="file-name">${escapeHtml(file.name)}</span>
     <div class="file-actions">
       <button class="favorite-btn ${isFavorite ? 'active' : ''}" title="Favorite">${isFavorite ? '❤️' : '🤍'}</button>
+      <button class="thumbsdown-btn ${isThumbsdown ? 'active' : ''}" title="Skip this song">${isThumbsdown ? '👎' : '👎🏻'}</button>
       <button title="File Info">ℹ️</button>
       <button title="Delete">🗑️</button>
     </div>
@@ -463,8 +471,9 @@ function createFileElement(file) {
   
   const buttons = div.querySelectorAll('button');
   buttons[0].onclick = (e) => { e.stopPropagation(); toggleFavorite(file.path, buttons[0]); };
-  buttons[1].onclick = (e) => { e.stopPropagation(); showFileInfo(file.path); };
-  buttons[2].onclick = (e) => { e.stopPropagation(); deleteFile(file.path); };
+  buttons[1].onclick = (e) => { e.stopPropagation(); toggleThumbsdown(file.path, buttons[1], div); };
+  buttons[2].onclick = (e) => { e.stopPropagation(); showFileInfo(file.path); };
+  buttons[3].onclick = (e) => { e.stopPropagation(); deleteFile(file.path); };
   
   div.onclick = (e) => {
     if (e.target.closest('.file-actions')) return;
@@ -955,6 +964,42 @@ async function loadFavorites() {
   }
 }
 
+async function loadThumbsdown() {
+  try {
+    const response = await fetch('/thumbsdown_list');
+    const data = await response.json();
+    if (data.success) {
+      thumbsdown = new Set(data.thumbsdown);
+    }
+  } catch (error) {
+    console.error('Error loading thumbsdown:', error);
+  }
+}
+
+function toggleThumbsdown(filePath, button, fileElement) {
+  fetch('/thumbsdown', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: filePath })
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.success) {
+      if (data.is_thumbsdown) {
+        thumbsdown.add(filePath);
+        button.textContent = '👎';
+        button.classList.add('active');
+        fileElement.classList.add('thumbsdown');
+      } else {
+        thumbsdown.delete(filePath);
+        button.textContent = '👎🏻';
+        button.classList.remove('active');
+        fileElement.classList.remove('thumbsdown');
+      }
+    }
+  });
+}
+
 function toggleFavorite(filePath, button) {
   fetch('/favorite', {
     method: 'POST',
@@ -1068,6 +1113,7 @@ function showAllFavorites() {
 
 document.addEventListener('DOMContentLoaded', async function() {
   await loadFavorites();
+  await loadThumbsdown();
   loadFolderTree();
   loadFiles('');
   setupFileContainerDrop();

@@ -763,14 +763,28 @@ body {
 }
 
 /* Favorites */
-.favorite-btn {
+.favorite-btn, .thumbsdown-btn {
   background-color: transparent !important;
   font-size: 1.1em !important;
 }
 
-.favorite-btn:hover {
+.favorite-btn:hover, .thumbsdown-btn:hover {
   background-color: transparent !important;
   transform: scale(1.2);
+}
+
+.thumbsdown-btn.active {
+  opacity: 1;
+}
+
+.file-item.thumbsdown {
+  opacity: 0.5;
+  background-color: #f5f5f5;
+}
+
+.file-item.thumbsdown .file-name {
+  text-decoration: line-through;
+  color: #999;
 }
 
 .breadcrumbs-row {

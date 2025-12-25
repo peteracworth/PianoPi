@@ -114,12 +114,21 @@ def play_loop():
     state["playing"] = True
     print(f"play_loop: starting playback, index={state['index']}")
 
+    thumbsdown = load_thumbsdown()
+    
     while state["playing"]:
         if state["index"] >= len(state["tracks"]):
             state["playing"] = False
             break
 
         track = state["tracks"][state["index"]]
+        
+        # Skip thumbs-downed tracks
+        if track in thumbsdown:
+            print(f"play_loop: skipping thumbs-downed track {track}")
+            state["index"] += 1
+            continue
+        
         path = os.path.join(MIDI_DIR, track)
         port = None
 
@@ -893,6 +902,7 @@ def delete_file():
 # ============================================================================
 
 FAVORITES_FILE = os.path.join(BASE_DIR, "favorites.json")
+THUMBSDOWN_FILE = os.path.join(BASE_DIR, "thumbsdown.json")
 
 def load_favorites():
     """Load favorites from JSON file"""
@@ -908,6 +918,21 @@ def save_favorites(favorites):
     """Save favorites to JSON file"""
     with open(FAVORITES_FILE, 'w') as f:
         json.dump(list(favorites), f)
+
+def load_thumbsdown():
+    """Load thumbs-down list from JSON file"""
+    if os.path.exists(THUMBSDOWN_FILE):
+        try:
+            with open(THUMBSDOWN_FILE, 'r') as f:
+                return set(json.load(f))
+        except:
+            pass
+    return set()
+
+def save_thumbsdown(thumbsdown):
+    """Save thumbs-down list to JSON file"""
+    with open(THUMBSDOWN_FILE, 'w') as f:
+        json.dump(list(thumbsdown), f)
 
 @app.route("/favorites", methods=["GET"])
 def get_favorites():
@@ -934,6 +959,34 @@ def toggle_favorite():
     
     save_favorites(favorites)
     return {"success": True, "is_favorite": is_favorite}, 200
+
+
+@app.route("/thumbsdown_list", methods=["GET"])
+def get_thumbsdown():
+    """Get list of thumbs-down files"""
+    thumbsdown = load_thumbsdown()
+    return {"success": True, "thumbsdown": list(thumbsdown)}, 200
+
+
+@app.route("/thumbsdown", methods=["POST"])
+def toggle_thumbsdown():
+    """Toggle thumbs-down status for a file"""
+    data = request.get_json()
+    if not data or "path" not in data:
+        return {"success": False, "message": "Invalid request"}, 400
+    
+    file_path = data["path"].strip()
+    thumbsdown = load_thumbsdown()
+    
+    if file_path in thumbsdown:
+        thumbsdown.remove(file_path)
+        is_thumbsdown = False
+    else:
+        thumbsdown.add(file_path)
+        is_thumbsdown = True
+    
+    save_thumbsdown(thumbsdown)
+    return {"success": True, "is_thumbsdown": is_thumbsdown}, 200
 
 
 @app.route("/move_folder", methods=["POST"])
